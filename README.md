@@ -24,7 +24,6 @@ Embed `audited.AuditedModel` into your model as an anonymous field to make the m
 
 ```go
 type Product struct {
-  gorm.Model
   Name string
   audited.AuditedModel
 }
