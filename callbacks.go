@@ -2,16 +2,18 @@ package audited
 
 import (
 	"fmt"
+	uuid "github.com/satori/go.uuid"
 	"reflect"
+	"strconv"
 
 	"github.com/jinzhu/gorm"
 )
 
 type auditableInterface interface {
-	SetCreatedBy(createdBy interface{})
-	GetCreatedBy() string
-	SetUpdatedBy(updatedBy interface{})
-	GetUpdatedBy() string
+	SetCreatedBy(User)
+	GetCreatedBy() User
+	SetUpdatedBy(User)
+	GetUpdatedBy() User
 }
 
 func isAuditable(scope *gorm.Scope) (isAuditable bool) {
@@ -22,34 +24,39 @@ func isAuditable(scope *gorm.Scope) (isAuditable bool) {
 	return
 }
 
-func getCurrentUser(scope *gorm.Scope) (string, bool) {
+func getCurrentUser(scope *gorm.Scope) (currentUser User, ok bool) {
 	var user interface{}
 	var hasUser bool
+	var err error
 
 	user, hasUser = scope.DB().Get("audited:current_user")
 
-	if !hasUser {
-		user, hasUser = scope.DB().Get("qor:current_user")
-	}
-
 	if hasUser {
-		var currentUser string
-		if primaryField := scope.New(user).PrimaryField(); primaryField != nil {
-			currentUser = fmt.Sprintf("%v", primaryField.Field.Interface())
-		} else {
-			currentUser = fmt.Sprintf("%v", user)
+		if userID, ok := scope.New(user).FieldByName("id"); ok {
+			id := fmt.Sprintf("%v", userID.Field.Interface())
+			currentUser.ID, err =  uuid.FromString(id)
+			if err != nil {
+				return currentUser, false
+			}
 		}
-
+		if userRole, ok := scope.New(user).FieldByName("role"); ok {
+			role :=  fmt.Sprintf("%v", userRole.Field.Interface())
+			currentUser.Role, err = strconv.ParseInt(role, 10, 64)
+			if err != nil {
+				return currentUser, false
+			}
+		}
 		return currentUser, true
 	}
 
-	return "", false
+	return currentUser, false
 }
 
 func assignCreatedBy(scope *gorm.Scope) {
 	if isAuditable(scope) {
 		if user, ok := getCurrentUser(scope); ok {
-			scope.SetColumn("CreatedBy", user)
+			scope.SetColumn("CreatedByID", user.ID)
+			scope.SetColumn("CreatedByRole", user.Role)
 		}
 	}
 }
@@ -59,16 +66,18 @@ func assignUpdatedBy(scope *gorm.Scope) {
 		if user, ok := getCurrentUser(scope); ok {
 			if attrs, ok := scope.InstanceGet("gorm:update_attrs"); ok {
 				updateAttrs := attrs.(map[string]interface{})
-				updateAttrs["updated_by"] = user
+				updateAttrs["updated_by_id"] = user.ID
+				updateAttrs["updated_by_role"] = user.Role
 				scope.InstanceSet("gorm:update_attrs", updateAttrs)
 			} else {
-				scope.SetColumn("UpdatedBy", user)
+				scope.SetColumn("UpdatedByID", user.ID)
+				scope.SetColumn("UpdatedByRole", user.Role)
 			}
 		}
 	}
 }
 
-// RegisterCallbacks register callback into GORM DB
+// RegisterCallbacks register callback into GORM DB
 func RegisterCallbacks(db *gorm.DB) {
 	callback := db.Callback()
 	if callback.Create().Get("audited:assign_created_by") == nil {
